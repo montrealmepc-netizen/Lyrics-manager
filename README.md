@@ -1,61 +1,35 @@
-# Obs-Lyrics-for-church
-lyrics manager for OBS designed for worship teams and live church services. It allows you to import, organize, edit, and display FreeShow (.show) files quickly and efficiently. With a built-in editor and agenda/playlist to prepare sessions, it gives full control over lyrics display, page by page, directly in OBS.
-Installation
+# MEPC Montreal Lyrics V1.0.1 - OBS Studio Script
 
-Install OBS Studio (version 27 or higher recommended).
+A comprehensive Python script for OBS Studio designed to manage and display worship song lyrics for live church services. This tool provides a powerful control panel to load, search, organize, edit, and display lyrics from a **FreeShow (`.show` file)** song library directly within OBS.
 
-Download the script mepc_montreal_lyrics.py.
+This script was developed by and for the production team at [MEPC Montreal](https://www.mepcmontreal.ca).
 
-Open OBS → Go to Tools → Scripts → Click + → Select the downloaded script.
+![Script Manager Screenshot](https://i.imgur.com/your-image-link-here.png)  ---
 
-Add a Text Source in OBS:
+## ✨ Key Features
 
-Either Text (GDI+) or Text (FreeType 2).
+* **🎵 FreeShow Library Integration:** Automatically scans and loads your entire library of FreeShow `.show` files, organizing them by category based on your folder structure.
+* **🗓️ Agenda / Playlist Management:** Build a service playlist ("Agenda") by adding songs from your library. You can reorder, remove, or clear the agenda on the fly. The agenda is saved automatically.
+* **🔍 Smart Search:** A powerful search engine that finds songs by title, number, or lyrics content. It uses a scoring system to bring the most relevant results to the top.
+* **✍️ Full Lyrics Editor:** Select any song and edit its lyrics directly within the manager. Changes can be saved back to the original `.show` file, making corrections simple and permanent.
+* **📄 Page-by-Page Display:** Long song verses are automatically split into readable "pages" or "blocks" that you can navigate through one by one.
+* ** seamlesslyOBS Integration:** The script controls a GDI+ text source in your scene and responds to configurable hotkeys for smooth operation during a live service.
 
-This is where the lyrics will be displayed.
+## ✅ Prerequisites
 
-Configure the script in OBS Scripts panel:
+1.  **OBS Studio:** Version 27 or newer is recommended.
+2.  **Python 3:** A working Python installation that OBS Studio is configured to use.
+3.  **FreeShow Song Library:** A folder containing your song library saved as `.show` files. You can organize songs into subfolders, which will be used as categories.
+4.  **GDI+ Text Source:** You must have a "Text (GDI+)" source created in your OBS scene. This is the source the script will send the lyrics to.
 
-Library Folder: set the folder containing your .show FreeShow files.
+## ⚙️ Installation & Setup
 
-Text Source: select the OBS text source you just created.
+1.  **Download the Script:**
+    * Download the `mepc_montreal_lyrics_v1.0.1.py` file from this repository.
 
-Lines per Display: choose how many lines should appear per page.
+2.  **Install the Script in OBS:**
+    * In OBS Studio, go to **Tools > Scripts**.
+    * Click the **"+"** button in the bottom left corner and select the downloaded Python script file.
 
-Optional: set text and background colors and background opacity.
-
-Usage
-
-Open the Lyrics Editor from the script interface in OBS.
-
-Search & Filter Songs:
-
-Use the search bar to filter by title, number, or lyrics content.
-
-Use the category dropdown to filter by song categories.
-
-Manage Your Agenda (Playlist):
-
-Double-click a song in the list or click “➕ Add to Agenda” to add it.
-
-Reorder songs with the ⬆️ / ⬇️ buttons.
-
-Remove songs with the ❌ button.
-
-Load a Song:
-
-Select a song in the agenda or song list to load it.
-
-The lyrics are automatically split into pages for display in OBS.
-
-Navigate Lyrics in OBS:
-
-Use hotkeys (Next / Previous / First / Last) to control the text display.
-
-Edit Lyrics:
-
-Modify the full lyrics in the editor panel.
-
-Click “💾 Save Changes” to update the .show file.
-
-The agenda will automatically update to reflect changes.
+3.  **Configure the Script:**
+    * With the script selected, you will see its properties on the right.
