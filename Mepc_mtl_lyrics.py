@@ -1,5 +1,3 @@
-# CODE V1.0.1 - MEPC MONTREAL LYRICS (VERSION STABLE SANS FENÊTRE VIRTUELLE)
-
 import obspython as obs
 import tkinter as tk
 from tkinter import font, messagebox
@@ -7,11 +5,13 @@ import os
 import json
 import time
 import copy
-import unicodedata # Ajout pour la normalisation des accents
+import unicodedata
 
-# --- Constantes Globales pour l'Agenda ---
+# --- Constantes Globales pour l'Agenda et Hotkeys ---
 AGENDA_FILE = "mepc_lyrics_agenda.json"
 HOTKEY_NEXT_AGENDA = "mepc_lyrics_next_agenda"
+HOTKEY_OPEN_MANAGER = "mepc_lyrics_open_manager"
+# ---------------------------------------------------
 
 # --- Variables Globales (Gestionnaires) ---
 lyrics_manager = None
@@ -24,7 +24,6 @@ class LyricsManager:
     """Encapsule toutes les données et la logique de gestion des paroles."""
     def __init__(self, library_path, lines_per_disp):
         self.library_folder_path = library_path
-        # Assure que lines_per_display est >= 1 (corrige ValueError)
         self.lines_per_display = max(1, lines_per_disp)
         self.full_song_library = [] 
         self.displayed_songs = []   
@@ -36,6 +35,9 @@ class LyricsManager:
         self.current_category = ""
         self.editor_window = None
         self.text_source_name = "" 
+        
+        # NOUVELLE VARIABLE: État de l'affichage GDI dans l'église (maintenu)
+        self.display_on = True 
 
         self.load_agenda_from_file()
 
@@ -44,7 +46,6 @@ class LyricsManager:
     def _normalize_text(self, text):
         """Convertit le texte en minuscules et supprime les accents (pour une recherche agnostique)."""
         text = text.lower()
-        # Supprime les accents
         text = ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
         return text.strip()
 
@@ -55,13 +56,11 @@ class LyricsManager:
         number_normalized = self._normalize_text(song['number'])
         full_text_normalized = song['lyrics']
         
-        # 1. Correspondance de Séquence (Fuzzy Matching/Exacte)
         if query_str_normalized in title_normalized:
             score += 15 
         if query_str_normalized in number_normalized:
             score += 20 
 
-        # 2. Correspondance par Mots-clés (Tokenization & Priorisation)
         tokens_found_in_title = 0
         
         for token in query_tokens_normalized:
@@ -72,13 +71,11 @@ class LyricsManager:
             if token in full_text_normalized:
                 score += 1 
         
-        # Bonus si TOUS les mots-clés (non filtrés) sont dans le titre
         if tokens_found_in_title == len(query_tokens_normalized) and len(query_tokens_normalized) > 0:
             score += 10
             
-        # 3. Score minimal pour la correspondance simple dans le texte
         if score == 0 and query_str_normalized in full_text_normalized:
-             score += 1 
+                 score += 1 
 
         return score
     
@@ -157,9 +154,9 @@ class LyricsManager:
         if self.current_agenda_index == -1:
             if self.current_song_data:
                  for i, song in enumerate(self.song_agenda):
-                     if song.get('path') == self.current_song_data.get('path'):
-                         self.current_agenda_index = i 
-                         break
+                        if song.get('path') == self.current_song_data.get('path'):
+                                self.current_agenda_index = i 
+                                break
             if self.current_agenda_index == -1:
                 self.current_agenda_index = 0
             else:
@@ -178,7 +175,10 @@ class LyricsManager:
         self.current_song_data = {}
         self.lyrics_blocks = []
         self.current_index = -1
-        update_obs_text() 
+        # Si le display est ON quand la chanson se vide, on le désactive pour masquer la source.
+        if self.display_on:
+             self.toggle_display() 
+        update_obs_text(update_text_only=True) # Vide le texte pour être sûr
 
     def load_song(self, song_dict):
         self.current_song_data = song_dict
@@ -195,18 +195,21 @@ class LyricsManager:
                     self.lyrics_blocks.append({
                         "text": page_text,
                         "is_new_verse": (j == 0),
-                        "verse_index": i + 1     
+                        "verse_index": i + 1   
                     })
 
         self.current_index = 0 if self.lyrics_blocks else -1
         if self.editor_window and self.editor_window.winfo_exists():
             self.editor_window.update_on_song_select()
-        update_obs_text()
+        
+        # S'assurer que la source est visible quand on charge un chant
+        self.display_on = True 
+        update_obs_text(update_text_only=False) 
 
     def navigate_to(self, index):
         if self.lyrics_blocks:
             self.current_index = max(0, min(index, len(self.lyrics_blocks) - 1))
-            update_obs_text()
+            update_obs_text(update_text_only=True) 
             if self.editor_window and self.editor_window.winfo_exists():
                 self.editor_window.highlight_current_verse()
 
@@ -255,7 +258,6 @@ class LyricsManager:
                         self.full_song_library.append({
                             "title": title,
                             "number": number,
-                            # Le champ 'lyrics' est normalisé pour la recherche intelligente
                             "lyrics": self._normalize_text(full_lyrics_text),
                             "blocks": blocks,
                             "path": filepath,
@@ -283,29 +285,62 @@ class LyricsManager:
         if self.editor_window and self.editor_window.winfo_exists():
             self.editor_window.refresh_category_and_song_list()
             self.editor_window.refresh_agenda_list()
+            
+    # MODIFIÉ: Inverse l'état et force la mise à jour de la visibilité
+    def toggle_display(self):
+        """Inverse l'état d'affichage et met à jour la visibilité de la source GDI."""
+        self.display_on = not self.display_on
+        update_obs_text(update_text_only=False)
 
 
 # --- Fonctions Globales pour OBS ---
 
-def update_obs_text():
+# CORRIGÉ: Utilisation de obs_scene_from_source
+def update_obs_text(update_text_only=False):
     global lyrics_manager
-    if not lyrics_manager: return
+    if not lyrics_manager or not lyrics_manager.text_source_name: 
+        return
 
     text_to_display = ""
     if 0 <= lyrics_manager.current_index < len(lyrics_manager.lyrics_blocks):
         text_to_display = lyrics_manager.lyrics_blocks[lyrics_manager.current_index]["text"]
 
-    if lyrics_manager.text_source_name:
+    source = None
+    try:
+        # --- 1. Mise à jour du Contenu de la Source (Toujours fait) ---
         source = obs.obs_get_source_by_name(lyrics_manager.text_source_name)
         if source:
             settings = obs.obs_data_create()
+            # On envoie le texte seulement si la source existe.
             obs.obs_data_set_string(settings, "text", text_to_display)
             obs.obs_source_update(source, settings)
-            obs.obs_source_release(source)
             obs.obs_data_release(settings)
+        
+        # --- 2. Mise à jour de la Visibilité de l'Élément de Scène (Uniquement si nécessaire) ---
+        if not update_text_only:
+            current_scene_source = obs.obs_frontend_get_current_scene()
+            if current_scene_source:
+                # CORRECTION DE L'ERREUR DE TYPE ICI: obs_scene_from_source
+                scene = obs.obs_scene_from_source(current_scene_source)
+                
+                if scene and source:
+                    scene_item = obs.obs_scene_find_source(scene, lyrics_manager.text_source_name)
+                    
+                    if scene_item:
+                        obs.obs_sceneitem_set_visible(scene_item, lyrics_manager.display_on)
+                
+                obs.obs_source_release(current_scene_source) 
+
+    finally:
+        if source:
+             obs.obs_source_release(source)
 
     if lyrics_manager.editor_window and lyrics_manager.editor_window.winfo_exists():
-         lyrics_manager.editor_window.update_status_bar()
+       lyrics_manager.editor_window.update_status_bar()
+       # --- MODIFIÉ ---
+       # L'appel à update_live_preview() est maintenant dans update_status_bar()
+       # pour garantir la synchronisation.
+       
 
 def on_hotkey_pressed(hotkey_id):
     global lyrics_manager
@@ -315,17 +350,31 @@ def on_hotkey_pressed(hotkey_id):
         elif hotkey_id == "mepc_lyrics_first": lyrics_manager.navigate_to(0)
         elif hotkey_id == "mepc_lyrics_last": lyrics_manager.navigate_to(len(lyrics_manager.lyrics_blocks) - 1)
         elif hotkey_id == HOTKEY_NEXT_AGENDA: lyrics_manager.load_next_agenda_song()
+        # NOUVEL APPEL POUR LE TOGGLE
+        elif hotkey_id == "mepc_lyrics_toggle_display": lyrics_manager.toggle_display()
+
+
+def on_hotkey_manager_pressed(pressed):
+    """Fonction de rappel pour le raccourci clavier du gestionnaire."""
+    global lyrics_manager
+    if pressed and lyrics_manager:
+        open_editor_callback(None, None) # Ouvre le gestionnaire
 
 def setup_hotkeys():
     hotkeys = {
-        "mepc_lyrics_next": "Mepc_Lyrics: Suivant",
-        "mepc_lyrics_prev": "Mepc_Lyrics: Précédent",
-        "mepc_lyrics_first": "Mepc_Lyrics: Premier",
-        "mepc_lyrics_last": "Mepc_Lyrics: Dernier",
-        HOTKEY_NEXT_AGENDA: "Mepc_Lyrics: Prochain Chant de l'Agenda"
+        "mepc_lyrics_next": "Mepc_Lyrics: Suivant (Flèche Droite/Bas)",
+        "mepc_lyrics_prev": "Mepc_Lyrics: Précédent (Flèche Gauche/Haut)",
+        "mepc_lyrics_first": "Mepc_Lyrics: Premier Couplet",
+        "mepc_lyrics_last": "Mepc_Lyrics: Dernier Couplet",
+        HOTKEY_NEXT_AGENDA: "Mepc_Lyrics: Prochain Chant de l'Agenda (F1)",
+        "mepc_lyrics_toggle_display": "Mepc_Lyrics: Afficher/Cacher le Texte (Toggle)" # Nouveau hotkey pour le toggle
     }
     for id, desc in hotkeys.items():
+        # Utilisation d'un wrapper pour les hotkeys d'action simple
         obs.obs_hotkey_register_frontend(id, desc, lambda p, id=id: on_hotkey_pressed(id) if p else None)
+        
+    # NOUVEL ENREGISTREMENT pour le hotkey du gestionnaire
+    obs.obs_hotkey_register_frontend(HOTKEY_OPEN_MANAGER, "Mepc_Lyrics: Ouvrir/Fermer Gestionnaire", on_hotkey_manager_pressed)
 
 def open_editor_callback(props, prop):
     global lyrics_manager
@@ -345,8 +394,11 @@ def open_editor_callback(props, prop):
 
 def script_description(): 
     return """
-    <h2>MEPC MONTREAL LYRICS (Gestionnaire de Paroles) V1.0.1</h2>
+    <h2>MEPC MONTREAL LYRICS (Gestionnaire de Paroles) V1.0.7 (Live Edit Fix)</h2>
     <p>Gérez et modifiez votre bibliothèque de chants FreeShow (.show) avec un éditeur moderne qui reste au-dessus d'OBS.</p>
+    <p>Le bouton/raccourci **Toggle** cache/affiche **directement la visibilité** de la source de texte GDI dans la scène active.</p>
+    <p>Les modifications dans l'éditeur sont **affichées instantanément** dans OBS et l'aperçu.</p>
+    <p><b>Les modifications ne sont PAS sauvegardées** tant que le bouton "Sauvegarder les Modifications" n'est pas pressé.</p>
     <p>Ce script a été développé par l'équipe de production de louange de <a href='https://www.mepcmontreal.ca'>www.mepcmontreal.ca</a>.</p>
     """
 
@@ -366,8 +418,11 @@ def script_properties():
 
     obs.obs_properties_add_int(props, "lines_to_show", "Lignes par Affichage", 1, 10, 1)
     
+    # PROPRIÉTÉ: Toggle d'affichage par défaut (CORRECTION DE TYPERROR FAITE)
+    obs.obs_properties_add_bool(props, "default_display_on", "Afficher le Texte par défaut (au chargement)")
+    
     obs.obs_properties_add_button(props, "editor_button", "Ouvrir le Gestionnaire", open_editor_callback)
-
+    
     return props
 
 def script_load(settings):
@@ -376,15 +431,22 @@ def script_load(settings):
     library_folder_path = obs.obs_data_get_string(settings, "library_folder")
     
     lines_per_display = max(1, obs.obs_data_get_int(settings, "lines_to_show"))
-
+    
     lyrics_manager = LyricsManager(library_folder_path, lines_per_display)
     lyrics_manager.text_source_name = text_source_name
+    
+    # CHARGEMENT DE L'ÉTAT PAR DÉFAUT (Utilisation de obs_data_has_user_value)
+    setting_key = "default_display_on"
+    if obs.obs_data_has_user_value(settings, setting_key):
+         lyrics_manager.display_on = obs.obs_data_get_bool(settings, setting_key)
+    else:
+         lyrics_manager.display_on = True # Valeur par défaut si non défini
 
     setup_hotkeys()
     lyrics_manager.scan_freeshow_library(settings)
     lyrics_manager.reset_current_song_state()
 
-    print("MEPC MONTREAL LYRICS (V1.0.1) chargé.")
+    print("MEPC MONTREAL LYRICS (V1.0.7) chargé.")
 
 def script_update(settings): 
     global lyrics_manager
@@ -400,18 +462,23 @@ def script_update(settings):
         lyrics_manager.scan_freeshow_library(settings)
 
     lyrics_manager.text_source_name = obs.obs_data_get_string(settings, "text_source")
+    
+    # MISE À JOUR DE L'ÉTAT PAR DÉFAUT
+    setting_key = "default_display_on"
+    if obs.obs_data_has_user_value(settings, setting_key):
+        lyrics_manager.display_on = obs.obs_data_get_bool(settings, setting_key)
 
     if lines_changed:
         if lyrics_manager.current_song_data:
             lyrics_manager.load_song(lyrics_manager.current_song_data)
-    
-    update_obs_text()
+        
+    update_obs_text(update_text_only=False) 
 
 def script_unload(): 
     global lyrics_manager
     if lyrics_manager and lyrics_manager.editor_window and lyrics_manager.editor_window.winfo_exists():
         lyrics_manager.editor_window.after(0, lyrics_manager.editor_window.destroy) 
-    print("MEPC MONTREAL LYRICS (V1.0.1) déchargé.")
+    print("MEPC MONTREAL LYRICS (V1.0.7) déchargé.")
 
 
 # ----------------------------------------------------------------------
@@ -422,7 +489,7 @@ class LyricsEditor(tk.Tk):
     def __init__(self, manager):
         super().__init__()
         self.manager = manager
-        self.title("Gestionnaire de Louange V1.0.1"); self.geometry("1450x700")
+        self.title("Gestionnaire de Louange V1.0.7"); self.geometry("1450x700")
 
         # Polices
         self.font_main = font.Font(family="Segoe UI", size=10)
@@ -450,6 +517,13 @@ class LyricsEditor(tk.Tk):
         self.refresh_category_and_song_list() 
         self.bind_hotkeys() 
 
+        # --- SUPPRESSION DE L'AUTO-SAVE ---
+        # self.save_job_id = None
+        
+        # --- NOUVEL AJOUT ---
+        # Mise à jour initiale de l'aperçu
+        self.update_live_preview()
+
     def on_closing(self): 
         self.manager.editor_window = None 
         self.destroy()
@@ -469,7 +543,8 @@ class LyricsEditor(tk.Tk):
             self.control_frame, self.bottom_frame, self.agenda_container_frame,
             self.agenda_frame, self.agenda_button_frame, self.songs_frame,
             self.song_button_frame, self.verses_frame, self.editor_frame,
-            self.status_bar, self.agenda_control_frame
+            self.status_bar, self.agenda_control_frame,
+            self.live_preview_frame # --- NOUVEL AJOUT ---
         ]
 
         for w in widgets_to_update:
@@ -481,7 +556,7 @@ class LyricsEditor(tk.Tk):
         self.song_listbox.config(bg=list_bg, fg=fg_color, selectbackground=select_bg, selectforeground=select_fg)
         self.verse_listbox.config(bg=list_bg, fg=fg_color, selectbackground=select_bg, selectforeground=select_fg)
         
-        for frame in [self.agenda_container_frame, self.songs_frame, self.verses_frame, self.editor_frame]:
+        for frame in [self.agenda_container_frame, self.songs_frame, self.verses_frame, self.editor_frame, self.live_preview_frame]: # --- MODIFIÉ ---
             if frame.winfo_exists(): frame.config(fg=label_color)
 
         self.status_bar.config(bg=button_bg, fg=fg_color)
@@ -492,6 +567,9 @@ class LyricsEditor(tk.Tk):
         self.update_button_colors(self.song_button_frame)
         self.update_button_colors(self.live_button_frame)
         self.update_button_colors(self.agenda_control_frame)
+        
+        # Mise à jour de l'affichage du bouton de toggle
+        self.update_toggle_button_text()
         
         self.highlight_current_agenda_song() 
 
@@ -514,6 +592,9 @@ class LyricsEditor(tk.Tk):
         # --- Contrôles Supérieurs ---
         self.control_frame = tk.Frame(self, bg=self.bg_default); self.control_frame.pack(fill=tk.X, padx=12, pady=(10,8))
         
+        # NOUVEAU TOGGLE D'AFFICHAGE
+        self.toggle_button = tk.Button(self.control_frame, text="...", command=self.manager.toggle_display, relief=tk.FLAT, font=self.font_main, padx=10, pady=5, bd=0); self.toggle_button.pack(side=tk.RIGHT)
+        
         tk.Label(self.control_frame, text="🔍 Rechercher :", bg=self.bg_default, fg=self.label_color_default, font=self.font_main).pack(side=tk.LEFT)
         self.search_var = tk.StringVar(); self.search_var.trace("w", self.on_search_change)
         self.search_entry = tk.Entry(self.control_frame, textvariable=self.search_var, font=self.font_main, relief=tk.SOLID, bd=1, highlightthickness=1); self.search_entry.pack(fill=tk.X, expand=True, side=tk.LEFT, padx=8, ipady=4)
@@ -523,7 +604,7 @@ class LyricsEditor(tk.Tk):
         self.category_dropdown = tk.OptionMenu(self.control_frame, self.category_var, "Placeholder")
         self.category_dropdown.config(relief=tk.FLAT, font=self.font_main, padx=10, pady=5, bd=0)
         self.category_dropdown.pack(side=tk.LEFT)
-
+        
         # --- Barre d'État ---
         self.status_bar = tk.Label(self, text="Prêt | Aucune chanson chargée", anchor=tk.W, font=self.font_status, padx=10, pady=2, bd=0, relief=tk.FLAT)
         self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
@@ -579,10 +660,32 @@ class LyricsEditor(tk.Tk):
         self.editor_text = tk.Text(self.editor_frame, wrap=tk.WORD, font=self.font_editor, relief=tk.SOLID, bd=1, highlightthickness=0, undo=True, padx=8, pady=8); 
         self.editor_text.grid(row=0, column=0, sticky="nsew")
 
-    # --- Reste des méthodes ---
-    def toggle_theme(self):
-        pass 
+        # --- MODIFICATION : Remplacement de l'auto-save par l'édition live ---
+        self.editor_text.bind("<<Modified>>", self.on_editor_text_changed_live)
+        
+        # --- NOUVEL AJOUT : Colonne 5 (Aperçu Live) ---
+        self.live_preview_frame = tk.LabelFrame(main_pane, text="Aperçu Live (OBS)", bg=self.bg_default, fg=self.label_color_default, font=self.font_main, bd=0, padx=5, pady=5)
+        self.live_preview_frame.grid_rowconfigure(0, weight=1); self.live_preview_frame.grid_columnconfigure(0, weight=1)
+        main_pane.add(self.live_preview_frame, width=350, minsize=300)
 
+        self.live_preview_label = tk.Label(self.live_preview_frame, text="", font=("Segoe UI", 24, "bold"), 
+                                          bg="black", fg="white", justify=tk.CENTER, anchor=tk.CENTER, padx=10, pady=10)
+        self.live_preview_label.grid(row=0, column=0, sticky="nsew")
+        # Bind pour ajuster le wraplength (retour à la ligne) lors du redimensionnement
+        self.live_preview_label.bind('<Configure>', 
+            lambda e: self.live_preview_label.config(wraplength=max(100, e.width - 20)))
+        # --- FIN DE L'AJOUT ---
+
+
+    # --- Reste des méthodes ---
+    
+    # NOUVELLE MÉTHODE POUR LA MISE À JOUR DU BOUTON TOGGLE
+    def update_toggle_button_text(self):
+        if self.manager.display_on:
+            self.toggle_button.config(text="🟢 Affichage GDI: ON (Toggle Key)", bg="#64DD17", fg="white", activebackground="#4CAF50") # Vert
+        else:
+            self.toggle_button.config(text="🔴 Affichage GDI: OFF (Toggle Key)", bg="#D32F2F", fg="white", activebackground="#E57373") # Rouge
+            
     def update_status_bar(self):
         status_text = "Prêt | Aucune chanson chargée"
         if self.manager.current_song_data and self.manager.current_index != -1:
@@ -595,10 +698,50 @@ class LyricsEditor(tk.Tk):
             if self.manager.current_agenda_index >= 0:
                 agenda_info = f" (Agenda {self.manager.current_agenda_index + 1}/{len(self.manager.song_agenda)})"
             
-            status_text = f"ACTIF: {song_title}{agenda_info} | Couplet {verse_index} | Page {current}/{total}"
+            # Ajout de l'état du toggle à la barre de statut
+            display_status = "ON" if self.manager.display_on else "OFF"
+            status_text = f"ACTIF: {song_title}{agenda_info} | Couplet {verse_index} | Page {current}/{total} | GDI: {display_status}"
             
         self.status_bar.config(text=status_text)
         self.highlight_current_agenda_song() 
+        self.update_toggle_button_text() # Met à jour le bouton de toggle
+        
+        # --- NOUVEL AJOUT ---
+        self.update_live_preview() # Met à jour l'aperçu live
+
+    # --- NOUVELLE MÉTHODE : update_live_preview ---
+    def update_live_preview(self):
+        """Met à jour le label de l'aperçu live dans l'éditeur."""
+        if not hasattr(self, 'live_preview_label'):
+            return # S'assure que le widget existe
+
+        text_to_display = ""
+        font_size = 24 # Taille de police par défaut
+        
+        if not self.manager.display_on:
+            text_to_display = "AFFICHAGE CACHÉ"
+            font_size = 20
+        elif 0 <= self.manager.current_index < len(self.manager.lyrics_blocks):
+            text_to_display = self.manager.lyrics_blocks[self.manager.current_index]["text"]
+            
+            # Logique simple pour ajuster la taille de la police (auto-fit)
+            lines = text_to_display.split('\n')
+            char_count = len(text_to_display)
+            line_count = len(lines)
+            
+            # Ajuste la taille de la police en fonction du nombre de lignes/caractères
+            if line_count > 4 or char_count > 120:
+                font_size = 16
+            elif line_count > 3 or char_count > 80:
+                font_size = 18
+            elif line_count > 2 or char_count > 50:
+                font_size = 20
+        else:
+            text_to_display = "AUCUN CHANT\nSÉLECTIONNÉ"
+            font_size = 20
+
+        self.live_preview_label.config(text=text_to_display, font=("Segoe UI", font_size, "bold"))
+    # --- FIN DE LA NOUVELLE MÉTHODE ---
 
     def get_categories(self):
         categories = sorted(list(set(song['category'] for song in self.manager.full_song_library)))
@@ -686,6 +829,8 @@ class LyricsEditor(tk.Tk):
         self.agenda_listbox.delete(0, tk.END)
         for i, song in enumerate(self.manager.song_agenda):
             self.agenda_listbox.insert(tk.END, f"{i+1:02d}. [{song['category']}] {song['number']} - {song['title']}")
+        
+        # --- CORRECTION DE LA FAUTE DE FRAPPE ICI ---
         self.highlight_current_agenda_song() 
 
     def add_to_agenda(self, event): self.add_to_agenda_button()
@@ -727,7 +872,7 @@ class LyricsEditor(tk.Tk):
             song = self.manager.song_agenda.pop(index)
             self.manager.song_agenda.insert(index - 1, song)
             if self.manager.current_agenda_index == index: self.manager.current_agenda_index -= 1
-            elif self.manager.current_agenda_index == index - 1: self.manager.current_agenda_index += 1
+            elif self.manager.current_agenda_index == index + 1: self.manager.current_agenda_index -= 1
             self.refresh_agenda_list()
             self.agenda_listbox.selection_set(index - 1); self.agenda_listbox.activate(index - 1)
 
@@ -756,7 +901,12 @@ class LyricsEditor(tk.Tk):
         self.editor_text.delete('1.0', tk.END)
         full_text = "\n\n".join(self.manager.current_song_data.get("blocks", []))
         self.editor_text.insert('1.0', full_text)
+        
+        # Ré-armer le drapeau <<Modified>> après un chargement manuel
+        self.editor_text.edit_modified(False)
+        
         self.update_status_bar() 
+        # Note : update_status_bar() appelle maintenant update_live_preview()
 
     def update_verse_list(self):
         self.verse_listbox.delete(0, tk.END)
@@ -773,7 +923,7 @@ class LyricsEditor(tk.Tk):
                 # Correction stable : Utilisation de itemconfig avec SEULEMENT fg (couleur)
                 self.verse_listbox.itemconfig(i, fg=verse_fg) 
             else:
-                prefix = f"    - Page {i+1:02d} | "
+                prefix = f"   - Page {i+1:02d} | "
                 self.verse_listbox.insert(tk.END, f"{prefix}{preview}")
                 self.verse_listbox.itemconfig(i, fg=default_fg)
 
@@ -790,33 +940,138 @@ class LyricsEditor(tk.Tk):
             self.verse_listbox.activate(self.manager.current_index)
             self.verse_listbox.see(self.manager.current_index)
 
-    def bind_hotkeys(self):
-        self.bind('<Right>', lambda event: self.manager.navigate_to(self.manager.current_index + 1))
-        self.bind('<Left>', lambda event: self.manager.navigate_to(self.manager.current_index - 1))
-        self.bind('<Up>', lambda event: self.manager.navigate_to(0)) 
-        self.bind('<Down>', lambda event: self.manager.navigate_to(len(self.manager.lyrics_blocks) - 1)) 
-        self.bind('<F1>', lambda event: self.manager.load_next_agenda_song())
+    # --- MÉTHODES DE RACCOURCIS ET D'AUTO-SAVE (CORRIGÉES) ---
 
-    def save_lyrics(self):
+    def bind_hotkeys(self):
+        # Raccourcis Tkinter (dans la fenêtre)
+        
+        # BUG SUPPRIMÉ : Les 4 lignes suivantes désactivaient les flèches
+        # dans l'éditeur de texte. Elles sont maintenant désactivées pour 
+        # permettre l'édition de texte normale.
+        # self.bind('<Right>', lambda event: self.manager.navigate_to(self.manager.current_index + 1))
+        # self.bind('<Left>', lambda event: self.manager.navigate_to(self.manager.current_index - 1))
+        # self.bind('<Up>', lambda event: self.manager.navigate_to(0)) 
+        # self.bind('<Down>', lambda event: self.manager.navigate_to(len(self.manager.lyrics_blocks) - 1)) 
+        
+        # Les raccourcis F1 et F2 sont conservés car ils ne gênent pas l'édition.
+        self.bind('<F1>', lambda event: self.manager.load_next_agenda_song())
+        self.bind('<F2>', lambda event: self.manager.toggle_display()) # F2 pour le toggle dans l'éditeur
+    
+    # --- SUPPRESSION DE 'on_editor_text_modified' (Auto-save) ---
+
+    # --- NOUVELLE MÉTHODE : 'on_editor_text_changed_live' (Édition instantanée) ---
+    def on_editor_text_changed_live(self, event=None):
+        """
+        Met à jour la chanson en mémoire (pas sur le disque) à chaque
+        modification de l'éditeur pour un aperçu instantané.
+        """
+        if not self.manager.current_song_data:
+            try: self.editor_text.edit_modified(False)
+            except: pass
+            return # Pas de chanson chargée
+
+        try:
+            # --- 1. Obtenir le texte de l'éditeur ---
+            edited_text = self.editor_text.get("1.0", tk.END)
+            if edited_text.endswith('\n'):
+                edited_text = edited_text[:-1] # Retirer le \n final de tk.Text
+            
+            # --- 2. Reconstruire les blocs (source) ---
+            new_blocks = edited_text.split('\n\n')
+            
+            # --- 3. Mettre à jour les données "source" en mémoire ---
+            # (Ceci est temporaire, jusqu'à la sauvegarde manuelle)
+            self.manager.current_song_data["blocks"] = new_blocks
+            
+            # --- 4. Sauvegarder l'index actuel ---
+            current_page_index = self.manager.current_index
+            
+            # --- 5. Re-paginer les blocs (re-générer lyrics_blocks) ---
+            self.manager.lyrics_blocks = []
+            for i, full_block_text in enumerate(self.manager.current_song_data.get("blocks", [])):
+                all_lines = full_block_text.split('\n')
+                for j in range(0, len(all_lines), self.manager.lines_per_display):
+                    page_lines = all_lines[j : j + self.manager.lines_per_display]
+                    page_text = "\n".join(page_lines)
+                    if page_text.strip():
+                        self.manager.lyrics_blocks.append({
+                            "text": page_text,
+                            "is_new_verse": (j == 0),
+                            "verse_index": i + 1   
+                        })
+
+            # --- 6. Mettre à jour l'interface (Couplets) ---
+            self.update_verse_list() 
+            
+            # --- 7. Valider l'index et rafraîchir GDI/Aperçu ---
+            new_index = min(current_page_index, len(self.manager.lyrics_blocks) - 1)
+            if new_index < 0 and len(self.manager.lyrics_blocks) > 0:
+                new_index = 0
+            elif not self.manager.lyrics_blocks:
+                 new_index = -1
+            
+            self.manager.current_index = new_index
+            
+            # Mettre à jour le surlignage dans la liste des couplets
+            self.highlight_current_verse()
+
+            # Envoyer le texte mis à jour à OBS
+            update_obs_text(update_text_only=True)
+            
+            # Mettre à jour la barre de statut et l'aperçu live
+            self.update_status_bar() 
+
+        except Exception as e:
+            print(f"Erreur lors de la mise à jour live: {e}")
+        
+        # --- 8. Ré-armer le drapeau <<Modified>> ---
+        try:
+            self.editor_text.edit_modified(False)
+        except tk.TclError:
+            pass # Le widget a peut-être été détruit
+
+    def _perform_save_and_light_reload(self, silent=True):
+        """
+        Sauvegarde la chanson actuelle (basé sur l'éditeur) et recharge
+        UNIQUEMENT cette chanson en mémoire.
+        
+        'silent=True' (pour l'auto-save) n'affiche pas de popup.
+        'silent=False' (pour le bouton) affiche un popup de confirmation.
+        """
+        
+        # --- SUPPRESSION DE LA VÉRIFICATION 'save_job_id' ---
+            
         if not self.manager.current_song_data or not self.manager.current_song_data.get("path"):
-            messagebox.showwarning("Sauvegarde", "Aucune chanson sélectionnée pour la sauvegarde.")
+            if not silent:
+                messagebox.showwarning("Sauvegarde", "Aucune chanson sélectionnée pour la sauvegarde.")
             return
 
         filepath = self.manager.current_song_data["path"]
+        current_song_path = self.manager.current_song_data["path"]
+        current_page_index = self.manager.current_index
+        current_agenda_index = self.manager.current_agenda_index
+
         try:
+            # --- 1. Lire le fichier original ---
             with open(filepath, 'r', encoding='utf-8') as f:
                 original_data = json.load(f)
 
-            edited_text = self.editor_text.get("1.0", tk.END).strip()
-            new_blocks = edited_text.split('\n\n')
+            # --- 2. Obtenir le texte de l'éditeur (CORRECTION DU BUG DE 'STRIP()') ---
+            # tk.Text.get() ajoute toujours un '\n' final. Nous le retirons manuellement
+            # sans supprimer les sauts de ligne que l'utilisateur a VRAIMENT tapés.
+            edited_text = self.editor_text.get("1.0", tk.END)
+            if edited_text.endswith('\n'):
+                edited_text = edited_text[:-1]
+            # --- FIN DE LA CORRECTION ---
 
+            # --- 3. Reconstruire les blocs ---
+            new_blocks = edited_text.split('\n\n')
             new_slides = {}
             slide_ids = list(original_data[1]["slides"].keys())
 
             for i, block in enumerate(new_blocks):
                 slide_id = slide_ids[i] if i < len(slide_ids) else f"newslide_{int(time.time())}_{i}"
                 lines_data = [{"align": "", "text": [{"style": "", "value": line_text}]} for line_text in block.split('\n')]
-
                 slide_template = original_data[1]["slides"].get(slide_id, {"group": "", "color": None, "settings": {}, "notes": "", "globalGroup": "verse"})
                 slide_template["items"] = [{"style": "top:120px;left:50px;height:840px;width:1820px;", "lines": lines_data}]
                 new_slides[slide_id] = slide_template
@@ -825,25 +1080,75 @@ class LyricsEditor(tk.Tk):
             
             for layout_content in original_data[1]["layouts"].values():
                 layout_content["slides"] = [{"id": sid} for sid in new_slides.keys()]
+            # --- Fin de la reconstruction JSON ---
 
+            # --- 4. Écrire sur le disque ---
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(original_data, f, ensure_ascii=False, separators=(',', ':'))
 
-            messagebox.showinfo("Sauvegarde", f"Chanson '{os.path.basename(filepath)}' sauvegardée avec succès.")
-
-            current_title = self.manager.current_song_data.get('title')
+            # --- 5. Mettre à jour les données du manager EN MÉMOIRE (Partie cruciale) ---
+            new_full_lyrics_text = "\n\n".join(new_blocks)
             
-            def dummy_settings():
-                return obs.obs_data_create()
+            # Mettre à jour la chanson dans la bibliothèque complète (source de vérité)
+            updated_song_in_library = None
+            for song in self.manager.full_song_library:
+                if song["path"] == current_song_path:
+                    song["blocks"] = new_blocks
+                    song["lyrics"] = self.manager._normalize_text(new_full_lyrics_text)
+                    updated_song_in_library = song
+                    break
             
-            self.manager.scan_freeshow_library(dummy_settings())
-
-            updated_song = next((s for s in self.manager.full_song_library if s["title"] == current_title), None)
-            if updated_song:
-                self.manager.load_song(updated_song)
+            # Mettre à jour les instances de cette chanson dans l'agenda
+            for song in self.manager.song_agenda:
+                    if song["path"] == current_song_path:
+                        song["blocks"] = new_blocks
+                        song["lyrics"] = self.manager._normalize_text(new_full_lyrics_text)
+            
+            # --- 6. Recharger la chanson dans le manager (léger) ---
+            if updated_song_in_library:
+                # On recharge à partir de la bibliothèque (source de vérité)
+                self.manager.load_song(copy.deepcopy(updated_song_in_library))
                 
-            self.refresh_agenda_list() 
+                # Restaurer les index
+                self.manager.current_agenda_index = current_agenda_index
+                
+                # S'assurer que la page est toujours valide
+                new_index = min(current_page_index, len(self.manager.lyrics_blocks) - 1)
+                if new_index < 0 and len(self.manager.lyrics_blocks) > 0:
+                    new_index = 0
+                    
+                self.manager.navigate_to(new_index) # recharge le texte OBS et re-surbrille
+            else:
+                # Fallback (ne devrait pas arriver)
+                self.update_on_song_select()
+                self.manager.navigate_to(current_page_index)
+
+            # --- 7. Indication visuelle ---
+            if silent:
+                # Ce cas ne devrait plus arriver car l'auto-save est désactivée
+                self.status_bar.config(text=f"Auto-sauvegarde de '{os.path.basename(filepath)}' terminée.")
+                self.after(2000, self.update_status_bar) # Revenir à la normale
+            else:
+                messagebox.showinfo("Sauvegarde", f"Chanson '{os.path.basename(filepath)}' sauvegardée avec succès.")
+                self.update_status_bar() # Mettre à jour la barre de statut
 
         except Exception as e:
-            messagebox.showerror("Erreur de Sauvegarde", f"ERREUR lors de la sauvegarde du fichier '{filepath}': {e}")
-            print(f"ERREUR lors de la sauvegarde du fichier '{filepath}': {e}")
+            print(f"ERREUR de sauvegarde: {e}")
+            if silent:
+                self.status_bar.config(text=f"ERREUR d'auto-sauvegarde: {e}")
+            else:
+                messagebox.showerror("Erreur de Sauvegarde", f"ERREUR lors de la sauvegarde du fichier '{filepath}': {e}")
+        
+        # --- 8. Ré-armer le drapeau <<Modified>> ---
+        # Doit être fait à la fin
+        try:
+            self.editor_text.edit_modified(False)
+        except tk.TclError:
+            pass
+
+    def save_lyrics(self):
+        """
+        Fonction appelée par le bouton 'Sauvegarder les Modifications'.
+        Appelle la fonction de sauvegarde principale en mode 'non silencieux'.
+        """
+        self._perform_save_and_light_reload(silent=False)
